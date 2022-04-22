@@ -1,19 +1,21 @@
 local Util = require("CraftingFramework.util.Util")
-local config = require("CraftingFramework.config")
 
+---@class craftingFrameworkCustomRequirement
 local CustomRequirement = {
     schema = {
         name = "CustomRequirement",
         fields = {
             getLabel = { type = "function",  required = true},
+            description = { type = "string", required = false},
             check = { type = "function",  required = true},
             showInMenu = { type = "boolean", default = true, required = false},
         }
     }
 }
 
-
---Constructor
+---Constructor
+---@param data craftingFrameworkCustomRequirementData
+---@return craftingFrameworkCustomRequirement customRequirement
 function CustomRequirement:new(data)
     Util.validate(data, CustomRequirement.schema)
     setmetatable(data, self)
@@ -21,10 +23,12 @@ function CustomRequirement:new(data)
     return data
 end
 
-function CustomRequirement:getName()
-    return self.name
+function CustomRequirement:getLabel()
+    return nil
 end
 
-
+function CustomRequirement:check()
+    return nil
+end
 
 return CustomRequirement

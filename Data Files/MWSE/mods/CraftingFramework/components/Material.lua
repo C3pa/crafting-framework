@@ -1,5 +1,6 @@
 local Util = require("CraftingFramework.util.Util")
 local logger = Util.createLogger("Material")
+---@class craftingFrameworkMaterial
 local Material = {
     schema = {
         name = "Material",
@@ -12,6 +13,8 @@ local Material = {
 }
 
 Material.registeredMaterials = {}
+---@param id string
+---@return craftingFrameworkMaterial material
 function Material.getMaterial(id)
     local material = Material.registeredMaterials[id:lower()]
     if not material then
@@ -34,6 +37,8 @@ function Material.getMaterial(id)
     return material
 end
 
+---@param data craftingFrameworkMaterialData
+---@return craftingFrameworkMaterial material
 function Material:new(data)
     Util.validate(data, Material.schema)
 
@@ -54,18 +59,23 @@ function Material:new(data)
     return material
 end
 
+---@param itemId string
+---@return boolean isMaterial
 function Material:itemIsMaterial(itemId)
     return self.ids[itemId:lower()]
 end
 
+---@return string name
 function Material:getName()
     return self.name
 end
 
+---@param numRequired number
+---@return boolean hasEnough
 function Material:checkHasIngredient(numRequired)
     local count = 0
     for id, _ in pairs(self.ids) do
-        count = count + mwscript.getItemCount{ reference = tes3.player, item = id }
+        count = count + tes3.getItemCount{ reference = tes3.player, item = id }
     end
     return count >= numRequired
 end

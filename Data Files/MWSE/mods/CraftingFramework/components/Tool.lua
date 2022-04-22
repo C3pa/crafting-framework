@@ -1,4 +1,5 @@
 local Util = require("CraftingFramework.util.Util")
+local log = Util.createLogger("Tool")
 
 ---@class Tool
 local Tool = {
@@ -7,7 +8,8 @@ local Tool = {
         fields = {
             id = { type = "string", required = true },
             name = { type = "string", required = false },
-            ids = { type = "table", childType = "string", required = true }
+            ids = { type = "table", childType = "string", required = false },
+            requirement = { type = "function", required = false},
         }
     }
 }
@@ -28,13 +30,16 @@ function Tool:new(data)
         Tool.registeredTools[data.id] = {
             id = data.id,
             name = data.name,
-            ids = {}
+            ids = {},
+            requirement = data.requirement
         }
     end
     local tool = Tool.registeredTools[data.id]
     --add tool ids
-    for _, id in ipairs(data.ids) do
-        tool.ids[id:lower()] = true
+    if data.ids then
+        for _, id in ipairs(data.ids) do
+            tool.ids[id:lower()] = true
+        end
     end
     setmetatable(tool, self)
     self.__index = self
@@ -47,13 +52,15 @@ end
 
 function Tool:use(amount)
     amount = amount or 1
-    for id, _ in pairs(self.ids) do
+    log:debug("Using tool, degrading by %s", amount)
+    for id, _ in pairs(self:getToolIds()) do
         local obj = tes3.getObject(id)
         if obj then
             local itemStack = tes3.player.object.inventory:findItemStack(obj)
             if itemStack then
+                log:debug("Found in inventory: %s", itemStack.object.id)
                 if not itemStack.variables then
-                    local itemData = tes3.addItemData{
+                    tes3.addItemData{
                         to = tes3.player,
                         item = itemStack.object,
                         updateGUI = true
@@ -61,105 +68,33 @@ function Tool:use(amount)
                 end
                 for _, itemData in ipairs(itemStack.variables) do
                     if itemData.condition > 0 then
-                        Util.log:debug("Degrading condition of tool: %s", self:getName())
+                        log:debug("Degrading condition of tool: %s", self:getName())
                         itemData.condition = math.max(0, itemData.condition - amount)
+                        return
                     end
                 end
+                log:debug("Couldn't find an itemData with condition to degrade")
+                return
             end
         end
     end
+    log:debug("Couldn't find any item to degrade")
 end
 
----@param obj tes3object
----@param requirements craftingFrameworkToolRequirements
----@return boolean
-function Tool.checkInventoryToolCount(obj, requirements)
-    local countNeeded = requirements.count or 1
-    local count = mwscript.getItemCount{ reference = tes3.player, item = obj }
-    if count < countNeeded then
-        Util.log:debug("Player has %d %s, needs %s", count, obj.id, countNeeded)
-        return false
-    end
-    return true
-end
-
----@param obj tes3object
----@param requirements craftingFrameworkToolRequirements
----@return boolean
-function Tool.checkToolEquipped(obj, requirements)
-    if requirements.equipped then
-        local hasEquipped = tes3.getEquippedItem{
-            actor = tes3.player,
-            objectType = obj.objectType,
-            slot = obj.slot,
-            type = obj.type
-        }
-        if not hasEquipped then
-            Util.log:debug("Tool %s needs to be equipped and isn't", obj.id)
-            return false
-        end
-        Util.log:debug("Tool %s is totally equipped", obj.id)
-    end
-    Util.log:debug("Tool doesn't need equipping")
-    return true
-end
-
----@param obj tes3object
----@return boolean
-function Tool.checkToolCondition(obj)
-    if obj.maxCondition then
-        local stack = tes3.player.object.inventory:findItemStack(obj)
-        if not( stack and stack.variables ) then return true end
-        for _, data in pairs(stack.variables) do
-            if data.condition and data.condition > 0 then
-                return true
+---@return table<string, true>
+function Tool:getToolIds()
+    if self.ids and #self.ids > 0 then return self.ids end
+    if self.requirement then
+        local ids = {}
+        for _, stack in pairs(tes3.player.object.inventory) do
+            if self.requirement(stack) then
+                ids[stack.object.id:lower()] = true
             end
         end
-        Util.log:debug("Scanned inventory and found no %s with enough condition", obj.id)
-        return false
+        return ids
     end
-end
-
----@param id string
----@param requirements craftingFrameworkToolRequirements
----@return boolean
-function Tool.checkToolRequirements(id, requirements)
-    local obj = tes3.getObject(id)
-    local isValid = obj
-        and Tool.checkInventoryToolCount(obj, requirements)
-        and Tool.checkToolEquipped(obj, requirements)
-        and Tool.checkToolCondition(obj)
-    if isValid then
-        Util.log:debug("Has specific tool")
-        return true
-    end
-    return false
-end
-
-
-function Tool:hasToolEquipped(requirements)
-    for id, _ in pairs(self.ids) do
-        local obj = tes3.getObject(id)
-        return Tool.checkToolEquipped(obj, requirements)
-    end
-end
-
-function Tool:hasToolCondition(requirements)
-    for id, _ in pairs(self.ids) do
-        local obj = tes3.getObject(id)
-        return Tool.checkToolCondition(obj, requirements)
-    end
-end
-
-function Tool:hasTool(requirements)
-    requirements = requirements or {}
-    for id, _ in pairs(self.ids) do
-        if Tool.checkToolRequirements(id, requirements) then
-            Util.log:debug("hasTool(): Has tool %s", id)
-            return true
-        end
-    end
-    return false
+    log:debug("getToolIds(): No tool ids found")
+    return {}
 end
 
 return Tool

@@ -1,17 +1,19 @@
 local Material = require("CraftingFramework.components.Material")
 local Recipe = require("CraftingFramework.components.Recipe")
 local Util = require("CraftingFramework.util.Util")
+local log = Util.createLogger("CraftingMenu")
 local Tool = require("CraftingFramework.components.Tool")
 local this = {}
 
 local selectedRecipe
 local currentRecipeList
+local currentCategories
 local showCategories
 local currentSorter
 local currentFilter
 
 local menuConfig = {
-    menuWidth = 600,
+    menuWidth = 720,
     menuHeight = 800,
     previewHeight = 270,
     previewWidth= 270,
@@ -51,17 +53,17 @@ local m2 = tes3matrix33.new()
 
 
 function this.closeMenu()
-    Util.log:debug("Closing Menu")
+    log:debug("Closing Menu")
     local menu = tes3ui.findMenu(uiids.craftingMenu)
     if menu then
-        Util.log:debug("Destroying Menu")
+        log:debug("Destroying Menu")
         menu:destroy()
         tes3ui.leaveMenuMode()
         selectedRecipe = nil
         currentRecipeList = nil
 
     else
-        Util.log:error("Can't find menu!!!")
+        log:error("Can't find menu!!!")
     end
 end
 
@@ -143,45 +145,68 @@ filters.skill = {
     nextFilter = "all"
 }
 
-
+local collapseCategories
+local function toggleAllCategories()
+    for _, category in pairs(currentCategories) do
+        category.visible = not collapseCategories
+    end
+end
 
 local menuButtons = {
     {
-        id = "Ashfall_Button_Filter",
+        id = "CraftingFramework_Button_collapse",
+        name = function()
+            return collapseCategories and "Expand [+]" or "Collapse [-]"
+        end,
+        callback = function(button)
+            collapseCategories = not collapseCategories
+            toggleAllCategories()
+            button.text = collapseCategories and "Expand [+]" or "Collapse [-]"
+            this.updateMenu()
+        end,
+    },
+    {
+        id = tes3ui.registerID("CraftingFramework_Button_ShowCategories"),
+        name = function()
+            return "Categories: " .. (showCategories and "Visible" or "Hidden")
+        end,
+        callback = function(_)
+            collapseCategories = false
+            toggleAllCategories()
+            showCategories = not showCategories
+            this.updateMenu()
+        end
+    },
+    {
+        id = "CraftingFramework_Button_Filter",
         name = function()
             return "Filter: " .. filters[currentFilter].name
         end,
         callback = function(_)
             local nextFilter = filters[currentFilter].nextFilter
-            Util.log:debug("Next Filter: " .. nextFilter)
+            log:debug("Next Filter: " .. nextFilter)
             currentFilter = nextFilter
-            this.populateRecipeList()
+            collapseCategories = false
+            toggleAllCategories()
+            this.updateMenu()
         end
     },
     {
-        id = tes3ui.registerID("Ashfall_Button_Sort"),
+        id = tes3ui.registerID("CraftingFramework_Button_Sort"),
         name = function()
             return "Sort: " .. sorters[currentSorter].name
         end,
         callback = function(_)
             local nextSorter = sorters[currentSorter].nextSorter
-            Util.log:debug("nextSorter: %s", nextSorter)
+            log:debug("nextSorter: %s", nextSorter)
             currentSorter = nextSorter
-            this.populateRecipeList()
+            collapseCategories = false
+            toggleAllCategories()
+            this.updateMenu()
         end
     },
     {
-        id = tes3ui.registerID("Ashfall_Button_ShowCategories"),
-        name = function()
-            return "Categories: " .. (showCategories and "Visible" or "Hidden")
-        end,
-        callback = function(_)
-            showCategories = not showCategories
-            this.populateRecipeList()
-        end
-    },
-    {
-        id = tes3ui.registerID("Ashfall_Button_CraftItem"),
+        id = tes3ui.registerID("CraftingFramework_Button_CraftItem"),
         name = function() return "Craft" end,
         callback = function(button)
             this.craftItem(button)
@@ -208,8 +233,11 @@ function this.toggleButtonDisabled(button, isVisible, isDisabled)
     button.disabled = isDisabled
 end
 
-function this.createToolTooltip(tool, toolReq)
-    Util.log:debug("ids: %s", json.encode(tool.ids, {indent = true}))
+---@param toolReq craftingFrameworkToolRequirement
+function this.createToolTooltip(toolReq)
+    local tool = toolReq.tool
+    if not tool then return end
+    if #tool.ids == 0 then return end
     local tooltip = tes3ui.createTooltipMenu()
     local outerBlock = tooltip:createBlock()
     outerBlock.flowDirection = "top_to_bottom"
@@ -225,11 +253,12 @@ function this.createToolTooltip(tool, toolReq)
     local header =  outerBlock:createLabel{ text = tool.name}
     header.color = tes3ui.getPalette("header_color")
 
-    for id, _ in pairs(tool.ids) do
-        Util.log:debug("Tool Id: %s", id)
+    for id, _ in pairs(tool:getToolIds()) do
+        log:debug("Tool Id: %s", id)
         local item = tes3.getObject(id)
         if item then
-            local itemCount = mwscript.getItemCount{ reference = tes3.player, item = item }
+            log:debug("checking toolId: %s", id)
+            local itemCount =tes3.getItemCount{ reference = tes3.player, item = item }
             local block = outerBlock:createBlock{}
             block.flowDirection = "left_to_right"
             block.autoHeight = true
@@ -240,39 +269,41 @@ function this.createToolTooltip(tool, toolReq)
             local nameText = string.format("%s (%G)", item.name, itemCount)
 
             if toolReq.equipped then
-                if Tool.checkToolEquipped(item, toolReq) then
+                if toolReq:checkToolEquipped(item) then
                     nameText = string.format("%s (Equipped)", item.name)
                 else
                     nameText = string.format("%s (Not Equipped)", item.name)
                 end
             end
-            if itemCount > 0 and not Tool.checkToolCondition(item) then
+            if itemCount > 0 and not toolReq:checkToolCondition(item) then
                 nameText = string.format("%s (Broken)", item.name)
             end
             local textLabel = block:createLabel{ text = nameText}
             textLabel.borderAllSides = 4
 
-            if not Tool.checkToolRequirements(id, toolReq) then
+            if not toolReq:checkToolRequirements(id) then
                 textLabel.color = tes3ui.getPalette("disabled_color")
             end
         else
-            Util.log:error("Could not find item %s", id)
+            log:error("Could not find item %s", id)
         end
     end
 end
 
+---@param toolReq craftingFrameworkToolRequirement
+---@param parentList table
 function this.createToolLabel(toolReq, parentList)
-    local tool = Tool.getTool(toolReq.tool)
+    local tool = toolReq.tool
     if tool then
         local requirementText = string.format("%s x %G", tool.name, (toolReq.count or 1) )
         if toolReq.equipped then
-            if tool:checkToolEquipped(toolReq) then
+            if toolReq:hasToolEquipped() then
                 requirementText = string.format("%s (Equipped)", tool.name)
             else
                 requirementText = string.format("%s (Not Equipped)", tool.name)
             end
         end
-        if tool:hasToolCondition(toolReq) == false then
+        if toolReq:hasToolCondition() == false then
             requirementText = string.format("%s (Broken)", tool.name)
         end
 
@@ -281,10 +312,10 @@ function this.createToolLabel(toolReq, parentList)
         requirement.text = requirementText
 
         requirement:register("help", function()
-            this.createToolTooltip(tool, toolReq)
+            this.createToolTooltip(toolReq)
         end)
 
-        if tool:hasTool(toolReq) then
+        if toolReq:hasTool() then
             requirement.color = tes3ui.getPalette("normal_color")
         else
             requirement.color = tes3ui.getPalette("disabled_color")
@@ -292,22 +323,24 @@ function this.createToolLabel(toolReq, parentList)
     end
 end
 
+---@param recipe craftingFrameworkRecipe
 function this.updateToolsPane(recipe)
     local craftingMenu = tes3ui.findMenu(uiids.craftingMenu)
     if not craftingMenu then return end
     local toolRequirementsBlock = craftingMenu:findChild(uiids.toolRequirementsBlock)
     local list = craftingMenu:findChild(uiids.toolRequirementsPane)
     list:getContentElement():destroyChildren()
-    if #recipe.tools < 1 then
+    if #recipe.toolRequirements < 1 then
         toolRequirementsBlock.visible = false
     else
         toolRequirementsBlock.visible = true
-        for _, toolReq in ipairs(recipe.tools) do
+        for _, toolReq in ipairs(recipe.toolRequirements) do
             this.createToolLabel(toolReq, list)
         end
     end
 end
 
+---@param customRequirement craftingFrameworkCustomRequirement
 function this.createCustomRequirementLabel(customRequirement, list)
     local requirement = list:createLabel()
     requirement.borderAllSides = 2
@@ -327,6 +360,7 @@ function this.createCustomRequirementLabel(customRequirement, list)
     end
 end
 
+---@param recipe craftingFrameworkRecipe
 function this.updateCustomRequirementsPane(recipe)
     local craftingMenu = tes3ui.findMenu(uiids.craftingMenu)
     if not craftingMenu then return end
@@ -344,6 +378,7 @@ function this.updateCustomRequirementsPane(recipe)
     end
 end
 
+---@param skillReq craftingFrameworkSkillRequirement
 function this.createSkillTooltip(skillReq)
     local name = skillReq:getSkillName()
     local tooltip = tes3ui.createTooltipMenu()
@@ -370,6 +405,7 @@ function this.createSkillTooltip(skillReq)
     }
 end
 
+---@param skillReq craftingFrameworkSkillRequirement
 function this.createSkillLabel(skillReq, parentList)
     local current = skillReq:getCurrent()
     local skillText = string.format("%s: %s/%s",
@@ -390,6 +426,7 @@ function this.createSkillLabel(skillReq, parentList)
 end
 
 
+---@param recipe craftingFrameworkRecipe
 function this.updateSkillsRequirementsPane(recipe)
     local craftingMenu = tes3ui.findMenu(uiids.craftingMenu)
     if not craftingMenu then return end
@@ -407,6 +444,7 @@ function this.updateSkillsRequirementsPane(recipe)
     end
 end
 
+---@param material craftingFrameworkMaterial
 function this.createMaterialTooltip(material)
     local name = material:getName()
     local tooltip = tes3ui.createTooltipMenu()
@@ -425,7 +463,7 @@ function this.createMaterialTooltip(material)
     for id, _ in pairs(material.ids) do
         local item = tes3.getObject(id)
         if item then
-            local itemCount = mwscript.getItemCount{ reference = tes3.player, item = item }
+            local itemCount = tes3.getItemCount{ reference = tes3.player, item = item }
             local block = outerBlock:createBlock{}
             block.flowDirection = "left_to_right"
             block.autoHeight = true
@@ -444,6 +482,7 @@ function this.createMaterialTooltip(material)
     end
 end
 
+---@param materialReq craftingFrameworkMaterialRequirementData
 function this.createMaterialButton(materialReq, list)
     local material = Material.getMaterial(materialReq.material)
     local materialText = string.format("%s x %G", material:getName(), materialReq.count )
@@ -460,6 +499,7 @@ function this.createMaterialButton(materialReq, list)
     end
 end
 
+---@param recipe craftingFrameworkRecipe
 function this.updateMaterialsRequirementsPane(recipe)
     local craftingMenu = tes3ui.findMenu(uiids.craftingMenu)
     if not craftingMenu then return end
@@ -471,6 +511,7 @@ function this.updateMaterialsRequirementsPane(recipe)
     end
 end
 
+---@param recipe craftingFrameworkRecipe
 function this.updateDescriptionPane(recipe)
     local craftingMenu = tes3ui.findMenu(uiids.craftingMenu)
     if not craftingMenu then return end
@@ -484,46 +525,85 @@ function this.updateDescriptionPane(recipe)
     selectedItemLabel.autoHeight = true
     selectedItemLabel.color = tes3ui.getPalette("header_color")
     selectedItemLabel.text = recipe.craftable:getNameWithCount()
-    selectedItemLabel:register("help", function()
-        tes3ui.createTooltipMenu{ item = recipe.craftable.id }
-    end)
+
+    local obj = tes3.getObject(recipe.craftable.id)
 
     local previewDescription = descriptionBlock:createLabel{ id = uiids.previewDescription }
     previewDescription.wrapText = true
     previewDescription.text = recipe.description or ""
-    previewDescription:register("help", function()
-        tes3ui.createTooltipMenu{ item = recipe.craftable.id }
-    end)
+
+    if obj and obj.name and obj.name ~= "" then
+        selectedItemLabel:register("help", function()
+            tes3ui.createTooltipMenu{ item = recipe.craftable.id }
+        end)
+        previewDescription:register("help", function()
+            tes3ui.createTooltipMenu{ item = recipe.craftable.id }
+        end)
+    end
 end
 
-local function doAlternateRotation(item)
-    mwse.log("ObjectType = %s", table.find(tes3.objectType, item.objectType))
-    return item.objectType == tes3.objectType.weapon
-        or item.objectType == tes3.objectType.ammunition
+
+---@param recipe craftingFrameworkRecipe
+---@return craftingFrameworkRotationAxis
+local function getRotationAxis(recipe)
+    local rotationObjectTypes = {
+        [tes3.objectType.weapon] = 'y',
+        [tes3.objectType.ammunition] = 'y',
+    }
+
+    if recipe.rotationAxis then
+        return recipe.rotationAxis
+    elseif rotationObjectTypes[recipe:getItem().objectType] then
+        return rotationObjectTypes[recipe:getItem().objectType]
+    else
+        return 'z'
+    end
 end
 
-local nifRotateX = false
+local rotationAxis = 'z'
+---@param recipe craftingFrameworkRecipe
 function this.updatePreviewPane(recipe)
     local craftingMenu = tes3ui.findMenu(uiids.craftingMenu)
     if not craftingMenu then return end
     local item = recipe:getItem()
     if item then
+        log:debug("preview pane item: %s", item.id)
         --nifPreviewBLock
         local nifPreviewBlock = craftingMenu:findChild(uiids.nifPreviewBlock)
         if nifPreviewBlock then
             nifPreviewBlock:destroyChildren()
-            local mesh = recipe.mesh or item.mesh
-            local nif = nifPreviewBlock:createNif{ id = uiids.nif, path = mesh}
-            if not nif then return end
-            --nif.scaleMode = true
-            craftingMenu:updateLayout()
 
+            --[[
+                Morrowind UI has a weird bug where if a mesh does not have two parent
+                    niNodes above the trishape, it will be rendered incorrectly.
+
+                To get around this, we create the UI Nif with an empty niNode, then
+                    attach the object's mesh as a child of that.
+            ]]
+            local nif = nifPreviewBlock:createNif{ id = uiids.nif, path = "craftingFramework\\empty.nif"}
+            local mesh = recipe.mesh or item.mesh
+            --Avoid popups/CTDs if the mesh is missing.
+            if not tes3.getFileExists(string.format("Meshes/%s", mesh)) then
+                log:error("Mesh does not exist: %s", mesh)
+                return
+            end
+            log:debug("Loading mesh: %s", mesh)
+            local childNif = tes3.loadMesh(mesh, false)
+            if not nif then return end
+            if not childNif then return end
+            --Update the layout so the sceneNode becomes available
+            craftingMenu:updateLayout()
             local node = nif.sceneNode
+
+            --Attach the object's mesh to the empty niNode
+            node:attachChild(childNif)
+
+            --Remove parts of the mesh that fuck with bounding box calculations
             Util.removeLight(node)
             this.removeCollision(node)
             node:update()
 
-            --get size from bounding box
+            --get size from bounding box. This still sucks for autogenerated bounding boxes
             local maxDimension
             local bb = node:createBoundingBox(node.scale)
             local height = bb.max.z - bb.min.z
@@ -531,9 +611,11 @@ function this.updatePreviewPane(recipe)
             local depth = bb.max.x - bb.min.x
             maxDimension = math.max(width, depth, height)
 
-            local targetHeight = 170
+            local targetHeight = 160
             node.scale = targetHeight / maxDimension
-
+            if recipe.previewScale then
+                node.scale = node.scale * recipe.previewScale
+            end
             do --add properties
                 local vertexColorProperty = niVertexColorProperty.new()
                 vertexColorProperty.name = "vcol yo"
@@ -547,21 +629,42 @@ function this.updatePreviewPane(recipe)
                 node:attachProperty(zBufferProperty)
             end
 
-            if doAlternateRotation(item) then
-                nifRotateX = true
-                m1:toRotationZ(math.rad(-15))
-                local lowestPoint = bb.min.y * node.scale
-                node.translation.z = node.translation.z - lowestPoint
-                m2:toRotationX(math.rad(270))
-            else
-                nifRotateX = false
-                m1:toRotationX(math.rad(-15))
-                local lowestPoint = bb.min.z * node.scale
-                node.translation.z = node.translation.z - lowestPoint
-                m2:toRotationZ(math.rad(180))
+            do --Apply rotation
+                rotationAxis = getRotationAxis(recipe)
+                if rotationAxis == 'x' then
+                    m1:toRotationZ(math.rad(-15))
+                    local lowestPoint = bb.min.x * node.scale
+                    node.translation.z = node.translation.z - lowestPoint - 20
+                    m2:toRotationY(math.rad(90))
+                elseif rotationAxis == 'y' then
+                    m1:toRotationZ(math.rad(-15))
+                    local lowestPoint = bb.min.y * node.scale
+                    node.translation.z = node.translation.z - lowestPoint - 20
+                    m2:toRotationX(math.rad(270))
+                elseif rotationAxis == 'z' then
+                    m1:toRotationX(math.rad(-15))
+                    local lowestPoint = bb.min.z * node.scale
+                    node.translation.z = node.translation.z - lowestPoint - 20
+                    m2:toRotationZ(math.rad(180))
+                --Vertically flipped
+                elseif rotationAxis == '-x' then
+                    m1:toRotationZ(math.rad(15))
+                    local lowestPoint = bb.max.x * node.scale
+                    node.translation.z = node.translation.z + lowestPoint - 20
+                    m2:toRotationY(math.rad(-90))
+                elseif rotationAxis == '-y' then
+                    m1:toRotationZ(math.rad(15))
+                    local lowestPoint = bb.max.y * node.scale
+                    node.translation.z = node.translation.z + lowestPoint - 20
+                    m2:toRotationX(math.rad(90))
+                elseif rotationAxis == '-z' then
+                    m1:toRotationX(math.rad(15))
+                    local lowestPoint = bb.max.z * node.scale
+                    node.translation.z = node.translation.z + lowestPoint - 20
+                    m2:toRotationY(math.rad(180))
+                end
+                node.rotation = node.rotation * m1:copy() * m2:copy()
             end
-
-            node.rotation = node.rotation * m1:copy() * m2:copy()
             node.appCulled = false
             node:updateProperties()
             node:update()
@@ -575,14 +678,13 @@ function this.updateButtons()
     if not craftingMenu then return end
     for _, buttonConf in ipairs(menuButtons) do
         local button = craftingMenu:findChild(buttonConf.id)
-
+        button.text = buttonConf.name()
         if buttonConf.requirements and buttonConf.requirements()== false then
             this.toggleButtonDisabled(button, true, true)
         else
             this.toggleButtonDisabled(button, true, false)
             button:register("mouseClick", function()
                 buttonConf.callback(button)
-                button.text = buttonConf.name()
             end)
         end
 
@@ -615,6 +717,7 @@ function this.updateMenu()
 end
 
 
+---@param recipes craftingFrameworkRecipe[]
 function this.populateCategoryList(recipes, list)
     table.sort(recipes, sorters[currentSorter].sorter)
     for _, recipe in ipairs(recipes) do
@@ -670,21 +773,21 @@ function this.createCategoryBlock(category, parent)
     setCategoryVisible()
 end
 
-local currentCategories
+
 function this.updateCategoriesList()
     for _, category in pairs(currentCategories) do
-        Util.log:debug("Clearing recipes for %s", category.name)
+        log:debug("Clearing recipes for %s", category.name)
         category.recipes = {}
     end
 
     for _, recipe in pairs(currentRecipeList) do
         local category = recipe.category
         if not currentCategories[category] then
-            Util.log:debug("Category %s doesn't exist yet", category)
+            log:debug("Category %s doesn't exist yet", category)
             currentCategories[category] = {
                 name = category,
                 recipes = {},
-                visible = true,
+                visible = not collapseCategories,
             }
         end
         table.insert(currentCategories[recipe.category].recipes, recipe)
@@ -734,9 +837,11 @@ function this.rotateNif(e)
     local nif = menu:findChild(uiids.nif)
     if nif and nif.sceneNode then
         local node = nif.sceneNode
-        if nifRotateX then
+        if rotationAxis == 'x' or rotationAxis == '-x' then
+            m2:toRotationX(math.rad(15) * e.delta)
+        elseif rotationAxis == 'y' or rotationAxis == '-y' then
             m2:toRotationY(math.rad(15) * e.delta)
-        else
+        elseif rotationAxis == 'z' or rotationAxis == '-z' then
             m2:toRotationZ(math.rad(15) * e.delta)
         end
 
@@ -905,11 +1010,13 @@ end
 function this.addMenuButtons(parent)
     for _, buttonConf in ipairs(menuButtons) do
         local button = parent:createButton({ id = buttonConf.id})
+        button.minWidth = 0
         button.text = buttonConf.name()
         button.borderLeft = 0
     end
 end
 
+---@param menuActivator craftingFrameworkMenuActivator
 function this.openMenu(menuActivator)
     local title = menuActivator.name
     local recipeList = menuActivator.recipes
@@ -970,7 +1077,7 @@ end
 
 local RightClickMenuExit = include("mer.RightClickMenuExit")
 if RightClickMenuExit then
-    Util.log:debug("Registering Crafting Menu Exit button")
+    log:debug("Registering Crafting Menu Exit button")
     RightClickMenuExit.registerMenu{
         menuId = uiids.craftingMenu,
         buttonId = uiids.cancelButton

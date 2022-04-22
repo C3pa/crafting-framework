@@ -2,13 +2,13 @@ local Util = require("CraftingFramework.util.Util")
 local Positioner = require("CraftingFramework.controllers.Positioner")
 local config = require("CraftingFramework.config")
 
+---@class craftingFrameworkCraftable
 local Craftable = {
     schema = {
         name = "Craftable",
         fields = {
             id = { type = "string", required = true },
             name = { type = "string", required = false },
-            description = { type = "string", required = false },
             placedObject = { type = "string", required = false },
             uncarryable = { type = "boolean", required = false },
             additionalMenuOptions = { type = "table", required = false },
@@ -55,6 +55,10 @@ local Craftable = {
             "craftingFramework\\craft\\Metal2.wav",
             "craftingFramework\\craft\\Metal3.wav",
         },
+        carve = {
+            "craftingFramework\\craft\\Carve1.wav",
+            "craftingFramework\\craft\\Carve2.wav",
+        },
         default = {
             "craftingFramework\\craft\\Fabric1.wav",
             "craftingFramework\\craft\\Fabric2.wav",
@@ -74,10 +78,14 @@ local Craftable = {
 Craftable.registeredCraftables = {}
 --Static functions
 
+---@param id string
+---@return craftingFrameworkCraftable craftable
 function Craftable.getCraftable(id)
     return Craftable.registeredCraftables[id]
 end
 
+---@param id string
+---@return craftingFrameworkCraftable craftable
 function Craftable.getPlacedCraftable(id)
     for _, craftable in pairs(Craftable.registeredCraftables) do
         if craftable.placedObject == id:lower() then return craftable end
@@ -109,6 +117,8 @@ local function isCarryable(id)
 end
 --Methods
 
+---@param data craftingFrameworkCraftableData
+---@return craftingFrameworkCraftable
 function Craftable:new(data)
     Util.validate(data, Craftable.schema)
     data.id = data.id:lower()
@@ -118,11 +128,12 @@ function Craftable:new(data)
     if data.uncarryable and not data.placedObject then
         data.placedObject = data.id
     end
-    setmetatable(data, self)
+    ---@type craftingFrameworkCraftable
+    local craftable = setmetatable(data, self)
     self.__index = self
-    Craftable.registeredCraftables[data.id] = data
-    data:registerEvents()
-    return data
+    Craftable.registeredCraftables[craftable.id] = craftable
+    craftable:registerEvents()
+    return craftable
 end
 
 function Craftable:registerEvents()
@@ -166,11 +177,11 @@ function Craftable:swap(reference)
     Util.deleteRef(reference)
 end
 
-function Craftable:getDescription()
-    return self.description
-end
 
+---@param reference tes3reference
+---@return craftingFrameworkMenuButtonData[] menuButtons
 function Craftable:getMenuButtons(reference)
+	---@type craftingFrameworkMenuButtonData[]
     local menuButtons = {}
     if self.additionalMenuOptions then
         for _, option in ipairs(self.additionalMenuOptions) do
@@ -184,6 +195,7 @@ function Craftable:getMenuButtons(reference)
             })
         end
     end
+	---@type craftingFrameworkMenuButtonData[]
     local defaultButtons = {
         {
             text = "Open",
@@ -267,7 +279,7 @@ function Craftable:recoverItemsFromContainer(reference)
         end
         tes3ui.forcePlayerInventoryUpdate()
         if #itemList > 0 then
-            tes3.messageBox("Contents of %s added to inventory.", self:getName(reference))
+            tes3.messageBox("Contents of %s added to inventory.", self:getName())
         end
     end
 end
@@ -300,7 +312,7 @@ function Craftable:recoverMaterials(materialsUsed, materialRecovery)
             }
         end
     end
-    tes3ui.updateInventoryTiles()
+    tes3ui.forcePlayerInventoryUpdate()
     if didRecover then
         return recoverMessage
     end
