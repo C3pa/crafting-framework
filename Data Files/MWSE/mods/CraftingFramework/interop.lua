@@ -2,6 +2,7 @@ local MenuActivator = require("CraftingFramework.components.MenuActivator")
 local Recipe = require("CraftingFramework.components.Recipe")
 local Material = require("CraftingFramework.components.Material")
 local Tool = require("CraftingFramework.components.Tool")
+local Positioner = require("CraftingFramework.controllers.Positioner")
 ---@class craftingFrameworkInterop
 local interop = {}
 
@@ -83,5 +84,26 @@ end
 function interop.getTools(id)
     return Tool.registeredTools[id]
 end
+
+--[[
+    Activates the Positioner mechanic for the given reference
+]]
+---@class CraftingFramework.interop.activatePositionerParams
+---@field reference tes3reference
+---@field pinToWall boolean
+---@field placementSetting string
+---@field blockToggle boolean
+
+---@param e CraftingFramework.interop.activatePositionerParams
+function interop.activatePositioner(e)
+    Positioner.startPositioning{
+        target = e.reference,
+        nonCrafted = true,
+        pinToWall = e.pinToWall,
+        placementSetting = e.placementSetting,
+        blockToggle = e.blockToggle,
+    }
+end
+
 
 return interop

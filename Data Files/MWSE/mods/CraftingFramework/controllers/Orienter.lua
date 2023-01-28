@@ -82,7 +82,7 @@ local bottle
 function this.getGroundBelowRef(e)
 
     local ref = e.ref
-    local offset = -ref.object.boundingBox.min.z + 5
+    local offset = ref.object.boundingBox.max.z-ref.object.boundingBox.min.z
     if not ref then
         return
     end
@@ -141,6 +141,7 @@ function this.orientRefToGround(params)
     if result then
         this.positionRef(ref, result)
         this.orientRef(ref, result)
+        event.trigger("Ashfall:VerticaliseNodes", {reference = ref})
     end
 end
 

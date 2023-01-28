@@ -1,5 +1,5 @@
 local Util = require("CraftingFramework.util.Util")
-local log = Util.createLogger("Craftable")
+local logger = Util.createLogger("Craftable")
 local Positioner = require("CraftingFramework.controllers.Positioner")
 local config = require("CraftingFramework.config")
 
@@ -23,7 +23,9 @@ local Craftable = {
             destroyCallback = { type = "function", required = false },
             placeCallback = { type = "function", required = false },
             craftCallback = { type = "function", required = false },
+            positionCallback = { type = "function", required = false },
             mesh = { type = "string", required = false},
+            previewMesh = { type = "string", required = false},
             rotationAxis = { type = "string", required = false},
             previewScale = { type = "number", required = false},
             previewHeight = { type = "number", required = false, default = 0}
@@ -81,23 +83,24 @@ local Craftable = {
 
 
 Craftable.registeredCraftables = {}
+Craftable.craftablesIdexedByPlacedObject = {}
 --Static functions
 
 ---@param id string
 ---@return craftingFrameworkCraftable craftable
 function Craftable.getCraftable(id)
-    return Craftable.registeredCraftables[id]
+    return Craftable.registeredCraftables[id:lower()]
 end
 
 ---@param id string
 ---@return craftingFrameworkCraftable craftable
 function Craftable.getPlacedCraftable(id)
-    for _, craftable in pairs(Craftable.registeredCraftables) do
-        if craftable.placedObject == id:lower() then return craftable end
-    end
+    id = id:lower()
+    return Craftable.craftablesIdexedByPlacedObject[id]
 end
 
-local function isCarryable(id)
+function Craftable:isCarryable()
+    if self.uncarryable then return false end
     local unCarryableTypes = {
         [tes3.objectType.light] = true,
         [tes3.objectType.container] = true,
@@ -107,7 +110,7 @@ local function isCarryable(id)
         [tes3.objectType.npc] = true,
         [tes3.objectType.creature] = true,
     }
-    local placedObject = tes3.getObject(id)
+    local placedObject = tes3.getObject(self.id)
     if placedObject then
         if placedObject.canCarry then
             return true
@@ -120,59 +123,61 @@ local function isCarryable(id)
         return true
     end
 end
---Methods
+
+function Craftable:getPlacedObjectId()
+    if self.placedObject then
+        return self.placedObject
+    else
+        if not self:isCarryable() then
+            return self.id
+        end
+    end
+end
 
 ---@param data craftingFrameworkCraftableData
 ---@return craftingFrameworkCraftable
 function Craftable:new(data)
     Util.validate(data, Craftable.schema)
     data.id = data.id:lower()
-    if data.uncarryable == nil then
-        data.uncarryable = not isCarryable(data.id)
-    end
-    if data.uncarryable and not data.placedObject then
-        data.placedObject = data.id
+    --for pre-1.0.5 compatibility
+    if data.mesh then
+        data.previewMesh = data.mesh
+        data.mesh = nil
     end
     ---@type craftingFrameworkCraftable
     local craftable = setmetatable(data, self)
     self.__index = self
-    Craftable.registeredCraftables[craftable.id] = craftable
-    craftable:registerEvents()
+
+
+    local placedObjectId = craftable:getPlacedObjectId()
+    if placedObjectId then
+        local existingCraftable = Craftable.registeredCraftables[craftable.id]
+        if existingCraftable then
+            logger:warn("Found existing craftable %s, merging", craftable.id)
+            logger:debug("existing.placedObject: %s", existingCraftable.placedObject)
+            logger:debug("craftable.placedObject: %s", craftable.placedObject)
+            --merge
+            table.copymissing(craftable, existingCraftable)
+        end
+        Craftable.registeredCraftables[craftable.id] = craftable
+        Craftable.craftablesIdexedByPlacedObject[placedObjectId:lower()] = craftable
+    end
     return craftable
 end
 
-function Craftable:registerEvents()
-    if self.placedObject then
-        event.register("CraftingFramework:CraftableActivated", function(e)
-            if Util.isShiftDown() and Util.canBeActivated(e.reference) then
-                e.reference.data.allowActivate = true
-                tes3.player:activate(e.reference)
-                e.reference.data.allowActivate = nil
-            else
-                self:activate(e.reference)
-            end
-        end, { filter = self.placedObject:lower() })
-
-        event.register("itemDropped", function(e)
-            if self.placedObject and e.reference.baseObject.id:lower() == self.id then
-                self:swap(e.reference)
-            end
-        end)
-    end
-end
 
 function Craftable:activate(reference)
-    Util.messageBox{
+    tes3ui.showMessageMenu{
         message = self:getName(),
         buttons = self:getMenuButtons(reference),
-        doesCancel = true,
+        cancels = true,
         callbackParams = { reference = reference }
     }
 end
 
 function Craftable:swap(reference)
     local ref = tes3.createReference{
-        object = self.placedObject,
+        object = self:getPlacedObjectId(),
         position = reference.position:copy(),
         orientation = reference.orientation:copy(),
         cell = reference.cell
@@ -194,16 +199,18 @@ function Craftable:getMenuButtons(reference)
                 text = option.text,
                 enableRequirements = function()
                     if option.enableRequirements then
-                        local isEnabled = option.enableRequirements(reference)
-                        log:debug("%s has enable requirements, returning %s", option.text, isEnabled)
+                        local isEnabled = option.enableRequirements({
+                            reference = reference
+                        })
                         return isEnabled
                     end
                     return true
                 end,
                 showRequirements = function()
                     if option.showRequirements then
-                        local show = option.showRequirements(reference)
-                        log:debug("%s has show requirements, returning %s", option.text, show)
+                        local show = option.showRequirements({
+                            reference = reference
+                        })
                         return show
                     end
                     return true
@@ -242,7 +249,7 @@ function Craftable:getMenuButtons(reference)
         {
             text = "Pick Up",
             showRequirements = function()
-                return not self.uncarryable
+                return self:isCarryable()
             end,
             callback = function()
                 self:pickUp(reference)
@@ -251,10 +258,10 @@ function Craftable:getMenuButtons(reference)
         {
             text = "Destroy",
             showRequirements = function()
-                return self.uncarryable
+                return not self:isCarryable()
             end,
             callback = function()
-                Util.messageBox{
+                tes3ui.showMessageMenu{
                     message = string.format("Destroy %s?", self:getName()),
                     buttons = {
                         {
@@ -265,7 +272,7 @@ function Craftable:getMenuButtons(reference)
                         },
 
                     },
-                    doesCancel = true
+                    cancels = true
                 }
 
             end
@@ -286,7 +293,7 @@ function Craftable:position(reference)
         elseif (tes3.mobilePlayer.castReady) then
             tes3.mobilePlayer.castReady = false
         end
-        Positioner.togglePlacement{ target = reference }
+        Positioner.startPositioning{ target = reference }
     end)
 end
 
@@ -360,12 +367,14 @@ function Craftable:destroy(reference)
         position = { 0, 0, 0, },
     }
     reference:disable()
+    if self.destroyCallback then
+        self:destroyCallback({
+            reference = reference
+        })
+    end
     timer.delayOneFrame(function()
         mwscript.setDelete{ reference = reference}
     end)
-    if self.destroyCallback then
-        self:destroyCallback()
-    end
 end
 
 function Craftable:getName()
@@ -402,10 +411,13 @@ function Craftable:playDeconstructionSound()
 end
 
 function Craftable:craft(materialsUsed)
-    if self.uncarryable then
-        self:position(self:place(materialsUsed))
+    local reference
+    local item
+    if not self:isCarryable() then
+        reference = self:place(materialsUsed)
+        self:position(reference)
     else
-        local item = tes3.getObject(self.id)
+        item = tes3.getObject(self.id)
         if item then
             local count = self.resultAmount or 1
             tes3.addItem{
@@ -429,7 +441,10 @@ function Craftable:craft(materialsUsed)
     end
     self:playCraftingSound()
     if self.craftCallback then
-        self:craftCallback()
+        self:craftCallback{
+            item = item,
+            reference = reference
+        }
     end
 end
 
@@ -444,22 +459,24 @@ function Craftable:place(materialsUsed)
     local rayDist = ray and ray.intersection and math.min(ray.distance -5, 200) or 0
     local position = eyePos + eyeOri * rayDist
 
-    local ref = tes3.createReference{
-        object = self.placedObject,
+    local reference = tes3.createReference{
+        object = self:getPlacedObjectId(),
         cell = tes3.player.cell,
         orientation = tes3.player.orientation:copy() + tes3vector3.new(0, 0, math.pi),
         position = position
     }
-    ref.data.crafted = true
-    ref.data.positionerMaxSteepness = self.maxSteepness
-    ref.data.materialsUsed = materialsUsed
-    ref.data.materialRecovery = self.materialRecovery
-    ref:updateSceneGraph()
-    ref.sceneNode:updateNodeEffects()
+    reference.data.crafted = true
+    reference.data.positionerMaxSteepness = self.maxSteepness
+    reference.data.materialsUsed = materialsUsed
+    reference.data.materialRecovery = self.materialRecovery
+    reference:updateSceneGraph()
+    reference.sceneNode:updateNodeEffects()
     if self.placeCallback then
-        self:placeCallback()
+        self:placeCallback{
+            reference = reference
+        }
     end
-    return ref
+    return reference
 end
 
 return Craftable

@@ -24,8 +24,10 @@
 ---@field recoverEquipmentMaterials boolean
 ---@field destroyCallback function
 ---@field placeCallback function
+---@field positionCallback function
 ---@field craftCallback function
 ---@field mesh string
+---@field previewMesh string
 ---@field rotationAxis craftingFrameworkRotationAxis
 ---@field previewScale number
 ---@field previewHeight number
@@ -45,8 +47,9 @@
 ---@field recoverEquipmentMaterials boolean When set to true, and the craftable is an armor or weapon item, equipping it when it has 0 condition will destroy it and salvage its materials
 ---@field destroyCallback function Custom function called after a craftable has been destroyed
 ---@field placeCallback function Custom function called after a craftable has been placed
+---@field positionCallback function
 ---@field craftCallback function Custom function called after a craftable has been crafted
----@field mesh string This is the mesh override for the preview pane in the crafting menu. If no mesh is present, the 3D model of the associated item will be used.
+---@field previewMesh string This is the mesh override for the preview pane in the crafting menu. If no mesh is present, the 3D model of the associated item will be used.
 ---@field rotationAxis craftingFrameworkRotationAxis **Default "z"** Determines about which axis the preview mesh will rotate around. Defaults to the z axis.
 ---@field previewScale number **Default 1** Determines the scale of the preview mesh.
 ---@field previewHeight number **Default 1** Determines the height of the mesh in the preview window.

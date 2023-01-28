@@ -7,7 +7,7 @@ local Material = {
         fields = {
             id = { type = "string", required = true },
             name = { type = "string", required = false },
-            ids = { type = "table", childType = "string", required = true }
+            ids = { type = "table", childType = "string", required = true },
         }
     }
 }
@@ -41,7 +41,6 @@ end
 ---@return craftingFrameworkMaterial material
 function Material:new(data)
     Util.validate(data, Material.schema)
-
     if not Material.registeredMaterials[data.id] then
         Material.registeredMaterials[data.id] = {
             id = data.id,
@@ -57,6 +56,16 @@ function Material:new(data)
     setmetatable(material, self)
     self.__index = self
     return material
+end
+
+---@param materialList craftingFrameworkMaterialData[]
+function Material:registerMaterials(materialList)
+    if materialList.id then
+        logger:error("You passed a single material to registerMaterials, use registerMaterial instead or pass a list of materials")
+    end
+    for _, data in ipairs(materialList) do
+        Material:new(data)
+    end
 end
 
 ---@param itemId string
@@ -75,9 +84,23 @@ end
 function Material:checkHasIngredient(numRequired)
     local count = 0
     for id, _ in pairs(self.ids) do
-        count = count + tes3.getItemCount{ reference = tes3.player, item = id }
+        local item = tes3.getObject(id)
+        if item then
+            count = count + tes3.getItemCount{ reference = tes3.player, item = item }
+        end
     end
     return count >= numRequired
+end
+
+--Checks if at least one ingredient in the list is valid
+function Material:hasValidIngredient()
+    for id, _ in pairs(self.ids) do
+        local item = tes3.getObject(id)
+        if item then
+            return true
+        end
+    end
+    return false
 end
 
 return Material

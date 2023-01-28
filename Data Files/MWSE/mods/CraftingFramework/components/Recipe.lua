@@ -15,22 +15,23 @@ local MaterialRequirementSchema = {
     }
 }
 
-
----@class craftingFrameworkRecipe
+---@type craftingFrameworkRecipe
 local Recipe = {
     schema = {
         name = "Recipe",
         fields = {
             id = { type = "string", required = false },
+            craftableId = { type = "string", required = false },
             description = { type = "string", required = false },
             craftable = { type = Craftable.schema, required = false },
-            materials = { type = "table", childType = MaterialRequirementSchema, required = true },
+            materials = { type = "table", childType = MaterialRequirementSchema, required = false, default = {} },
             timeTaken = { type = "number", required = false },
-            knownByDefault = { type = "boolean", required = false },
+            knownByDefault = { type = "boolean", required = false, default = true },
             customRequirements = { type = "table", childType = CustomRequirement.schema, required = false },
             skillRequirements = { type = "table", childType = SkillRequirement.schema, required = false },
             toolRequirements = { type = "table", childType = ToolRequirement.schema, required = false },
             category = { type = "string", required = false },
+            persist = { type = "boolean", required = false, default = true },
         }
     }
 }
@@ -39,15 +40,15 @@ Recipe.registeredRecipes = {}
 ---@param id string
 ---@return craftingFrameworkRecipe recipe
 function Recipe.getRecipe(id)
-    return Recipe.registeredRecipes[id]
+    return Recipe.registeredRecipes[id:lower()]
 end
 
 ---@param data craftingFrameworkRecipeData
 ---@return craftingFrameworkRecipe recipe
 function Recipe:new(data)
+    ---@type craftingFrameworkRecipe
     local recipe = table.copy(data, {})
-    Util.validate(data, Recipe.schema)
-    recipe.knownByDefault = data.knownByDefault or true
+    Util.validate(recipe, Recipe.schema)
     --Flatten the API so craftable is just part of the recipe
     local craftableFields = Craftable.schema.fields
     recipe.craftable = data.craftable or {}
@@ -56,8 +57,15 @@ function Recipe:new(data)
             recipe.craftable[field] = data[field]
         end
     end
+    if recipe.craftableId then
+        recipe.craftable.id = recipe.craftableId
+        recipe.craftableId = nil
+    end
 
-    recipe.id = data.id or data.craftable.id
+    --Set ID and make sure it's lower case
+    recipe.id = data.id or recipe.craftable.id
+    recipe.id = recipe.id:lower()
+
     recipe.category = recipe.category or "Other"
     recipe.toolRequirements = Util.convertListTypes(data.toolRequirements, ToolRequirement) or {}
     recipe.skillRequirements = Util.convertListTypes(data.skillRequirements, SkillRequirement) or {}
@@ -66,7 +74,9 @@ function Recipe:new(data)
     recipe.craftable = Craftable:new(recipe.craftable)
     setmetatable(recipe, self)
     self.__index = self
-    Recipe.registeredRecipes[recipe.id] = recipe
+    if recipe.persist ~= false then
+        Recipe.registeredRecipes[recipe.id] = recipe
+    end
     return recipe
 end
 
@@ -81,8 +91,11 @@ function Recipe:unlearn()
 end
 
 function Recipe:isKnown()
-    if self.knownByDefault then return true end
-    return config.persistent.knownRecipes[self.id]
+    if self.knownByDefault then
+        return true
+    end
+    local knownRecipe = config.persistent.knownRecipes[self.id]
+    return knownRecipe
 end
 
 function Recipe:craft()
@@ -93,13 +106,15 @@ function Recipe:craft()
         local remaining = materialReq.count
         for id, _ in pairs(material.ids) do
             materialsUsed[id] = materialsUsed[id] or 0
-
-            local inInventory = tes3.getItemCount{ reference = tes3.player, item = id}
-            local numToRemove = math.min(inInventory, remaining)
-            materialsUsed[id] = materialsUsed[id] + numToRemove
-            tes3.removeItem{ reference = tes3.player, item = id, playSound = false, count = numToRemove}
-            remaining = remaining - numToRemove
-            if remaining == 0 then break end
+            local item = tes3.getObject(id)
+            if item then
+                local inInventory = tes3.getItemCount{ reference = tes3.player, item = id}
+                local numToRemove = math.min(inInventory, remaining)
+                materialsUsed[id] = materialsUsed[id] + numToRemove
+                tes3.removeItem{ reference = tes3.player, item = id, playSound = false, count = numToRemove}
+                remaining = remaining - numToRemove
+                if remaining == 0 then break end
+            end
         end
     end
     for _, toolReq in ipairs(self.toolRequirements) do
@@ -116,9 +131,9 @@ function Recipe:craft()
     end
 end
 
----@return tes3object object
+---@return tes3object|tes3weapon|tes3armor|tes3misc|tes3light object
 function Recipe:getItem()
-    local id = self.craftable.placedObject or self.id
+    local id = self.craftable:getPlacedObjectId() or self.craftable.id
     if id then
         return tes3.getObject(id)
     end
@@ -137,7 +152,7 @@ function Recipe:getAverageSkillLevel()
 end
 
 ---@return boolean
----@return string reason
+---@return string|nil reason
 function Recipe:hasMaterials()
     for _, materialReq in ipairs(self.materials) do
         local material = Material.getMaterial(materialReq.material)
@@ -145,16 +160,20 @@ function Recipe:hasMaterials()
             log:error("Can not craft %s, required material '%s' has not been registered", self.id, materialReq.material)
             return false, "You do not have the required materials"
         end
-        local numRequired = materialReq.count
-        if not material:checkHasIngredient(numRequired) then
-            return false, "You do not have the required materials"
+        --Material requirements only count if at lease one of the ingredients registered to that
+        --  material exists in the game
+        if material:hasValidIngredient() then
+            local numRequired = materialReq.count
+            if not material:checkHasIngredient(numRequired) then
+                return false, "You do not have the required materials"
+            end
         end
     end
     return true
 end
 
 ---@return boolean
----@return string reason
+---@return string|nil reason
 function Recipe:meetsToolRequirements()
     for _, toolRequirement in ipairs(self.toolRequirements) do
         local tool = toolRequirement.tool
@@ -172,7 +191,7 @@ function Recipe:meetsToolRequirements()
 end
 
 ---@return boolean
----@return string reason
+---@return string|nil reason
 function Recipe:meetsSkillRequirements()
     for _, skillRequirement in ipairs(self.skillRequirements) do
         if not skillRequirement:check() then
@@ -183,7 +202,7 @@ function Recipe:meetsSkillRequirements()
 end
 
 ---@return boolean
----@return string reason
+---@return string|nil reason
 function Recipe:meetsCustomRequirements()
     if self.customRequirements then
         for _, requirement in ipairs(self.customRequirements) do
@@ -197,7 +216,7 @@ function Recipe:meetsCustomRequirements()
 end
 
 ---@return boolean
----@return string reason
+---@return string|nil reason
 function Recipe:meetsAllRequirements()
     local meetsCustomRequirements, reason = self:meetsCustomRequirements()
     if not meetsCustomRequirements then return false, reason end
@@ -208,6 +227,10 @@ function Recipe:meetsAllRequirements()
     local meetsSkillRequirements, reason = self:meetsSkillRequirements()
     if not meetsSkillRequirements then return false, reason end
     return true
+end
+
+Recipe.__tostring = function(self)
+    return string.format("Recipe: %s", self.id)
 end
 
 return Recipe

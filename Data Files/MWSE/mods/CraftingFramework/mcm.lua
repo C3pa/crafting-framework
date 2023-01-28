@@ -7,14 +7,14 @@ local LINKS_LIST = {
         text = "Release history",
         url = "https://github.com/jhaakma/crafting-framework/releases"
     },
-    -- {
-    --     text = "Wiki",
-    --     url = "https://github.com/jhaakma/crafting-framework/wiki"
-    -- },
-    -- {
-    --     text = "Nexus",
-    --     url = "https://www.nexusmods.com/morrowind/mods/49057"
-    -- },
+    {
+        text = "Wiki",
+        url = "https://github.com/jhaakma/crafting-framework/wiki"
+    },
+    {
+        text = "Nexus",
+        url = "https://www.nexusmods.com/morrowind/mods/51009"
+    },
     {
         text = "Buy me a coffee",
         url = "https://ko-fi.com/merlord"
@@ -53,9 +53,6 @@ local function addSideBar(component)
 end
 
 
-
-
-
 local function registerMCM()
     local template = mwse.mcm.createTemplate{ name = config.static.modName }
     template.onClose = function()
@@ -77,7 +74,9 @@ local function registerMCM()
         },
         variable =  mwse.mcm.createTableVariable{ id = "logLevel", table = mcmConfig },
         callback = function(self)
-            Util.log:setLogLevel(self.variable.value)
+            for _, logger in pairs(Util.loggers) do
+                logger:setLogLevel(self.variable.value)
+            end
         end
     }
 
