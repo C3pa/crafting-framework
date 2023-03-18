@@ -1,7 +1,15 @@
 local Util = require("CraftingFramework.util.Util")
 local logger = Util.createLogger("Material")
----@class craftingFrameworkMaterial
-local Material = {
+
+---@class CraftingFramework.Material.data
+---@field id string **Required.**  This will be the unique identifier used internally by Crafting Framework to identify this `material`.
+---@field name string The name of the material. Used in various UIs.
+---@field ids table<number, string> **Required.**  This is the list of item ids that are considered as identical material.
+
+
+---@class CraftingFramework.Material : CraftingFramework.Material.data
+---@field ids table<string, boolean>
+Material = {
     schema = {
         name = "Material",
         fields = {
@@ -14,7 +22,7 @@ local Material = {
 
 Material.registeredMaterials = {}
 ---@param id string
----@return craftingFrameworkMaterial material
+---@return CraftingFramework.Material material
 function Material.getMaterial(id)
     local material = Material.registeredMaterials[id:lower()]
     if not material then
@@ -37,8 +45,8 @@ function Material.getMaterial(id)
     return material
 end
 
----@param data craftingFrameworkMaterialData
----@return craftingFrameworkMaterial material
+---@param data CraftingFramework.Material.data
+---@return CraftingFramework.Material material
 function Material:new(data)
     Util.validate(data, Material.schema)
     if not Material.registeredMaterials[data.id] then
@@ -51,6 +59,7 @@ function Material:new(data)
     local material = Material.registeredMaterials[data.id]
     --add material ids
     for _, id in ipairs(data.ids) do
+        logger:debug("registered %s as %s", id, material.id)
         material.ids[id:lower()] = true
     end
     setmetatable(material, self)
@@ -58,12 +67,17 @@ function Material:new(data)
     return material
 end
 
----@param materialList craftingFrameworkMaterialData[]
+---@param materialList CraftingFramework.Material.data[]
 function Material:registerMaterials(materialList)
-    if materialList.id then
+    if materialList.id then ---@diagnostic disable-line: undefined-field
         logger:error("You passed a single material to registerMaterials, use registerMaterial instead or pass a list of materials")
     end
+    logger:debug("Registering materials")
     for _, data in ipairs(materialList) do
+        logger:debug("Material: %s", data.id)
+        for _, id in ipairs(data.ids) do
+            logger:debug("  - %s", id)
+        end
         Material:new(data)
     end
 end
@@ -86,6 +100,7 @@ function Material:checkHasIngredient(numRequired)
     for id, _ in pairs(self.ids) do
         local item = tes3.getObject(id)
         if item then
+            ---@diagnostic disable-next-line: assign-type-mismatch
             count = count + tes3.getItemCount{ reference = tes3.player, item = item }
         end
     end

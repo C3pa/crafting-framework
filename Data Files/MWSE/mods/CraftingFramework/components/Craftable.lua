@@ -1,10 +1,32 @@
 local Util = require("CraftingFramework.util.Util")
 local logger = Util.createLogger("Craftable")
-local Positioner = require("CraftingFramework.controllers.Positioner")
+local Positioner = require("CraftingFramework.components.Positioner")
+local StaticActivator = require("CraftingFramework.components.StaticActivator")
+local Indicator = require("CraftingFramework.components.Indicator")
 local config = require("CraftingFramework.config")
 
----@class craftingFrameworkCraftable
-local Craftable = {
+---@alias CraftingFramework.Craftable.SoundType
+---| '"fabric"'
+---| '"wood"'
+---| '"leather"'
+---| '"rope"'
+---| '"straw"'
+---| '"metal"'
+---| '"carve"'
+
+---@class CraftingFramework.Craftable.callback.params
+---@field reference tes3reference? The reference that was crafted
+
+---@class CraftingFramework.Craftable.craftCallback.params : CraftingFramework.Craftable.callback.params
+---@field item tes3item? The item that was crafted
+---@field materialsUsed table<string, number> The materials used in the craft, with the material id as key and the amount as value
+
+---@class CraftingFramework.Craftable.data : CraftingFramework.Recipe.data
+
+---@class CraftingFramework.Craftable : CraftingFramework.Craftable.data
+---@field id string The id of the crafted Item
+---@field craftableId nil
+Craftable = {
     schema = {
         name = "Craftable",
         fields = {
@@ -22,13 +44,17 @@ local Craftable = {
             recoverEquipmentMaterials = { type = "boolean", required = false},
             destroyCallback = { type = "function", required = false },
             placeCallback = { type = "function", required = false },
-            craftCallback = { type = "function", required = false },
             positionCallback = { type = "function", required = false },
+            craftCallback = { type = "function", required = false },
+            quickActivateCallback = { type = "function", required = false },
             mesh = { type = "string", required = false},
             previewMesh = { type = "string", required = false},
             rotationAxis = { type = "string", required = false},
             previewScale = { type = "number", required = false},
-            previewHeight = { type = "number", required = false, default = 0}
+            previewHeight = { type = "number", required = false, default = 0},
+            noResult = { type = "boolean", required = false},
+            additionalUI  = { type = "function", required = false },
+            craftedOnly = { type = "boolean", required = false, default = true},
         }
     },
     constructionSounds = {
@@ -87,13 +113,13 @@ Craftable.craftablesIdexedByPlacedObject = {}
 --Static functions
 
 ---@param id string
----@return craftingFrameworkCraftable craftable
+---@return CraftingFramework.Craftable craftable
 function Craftable.getCraftable(id)
     return Craftable.registeredCraftables[id:lower()]
 end
 
 ---@param id string
----@return craftingFrameworkCraftable craftable
+---@return CraftingFramework.Craftable craftable
 function Craftable.getPlacedCraftable(id)
     id = id:lower()
     return Craftable.craftablesIdexedByPlacedObject[id]
@@ -134,8 +160,31 @@ function Craftable:getPlacedObjectId()
     end
 end
 
----@param data craftingFrameworkCraftableData
----@return craftingFrameworkCraftable
+local function craftableActivated(reference)
+    logger:debug("craftableActivated: %s", reference)
+    local craftable = Craftable.getPlacedCraftable(reference.baseObject.id:lower())
+    if craftable then
+        logger:trace("craftableActivated placedObject id: %s", craftable:getPlacedObjectId())
+        if Util.isQuickModifierDown() and craftable.quickActivateCallback then
+            logger:debug("quickActivateCallback: %s", require("inspect")(craftable.quickActivateCallback))
+            craftable:quickActivateCallback{reference = reference}
+        elseif Util.isQuickModifierDown() and Util.canBeActivated(reference) then
+            logger:debug("vanilla activate")
+            reference.data.allowActivate = true
+            tes3.player:activate(reference)
+            reference.data.allowActivate = nil
+        elseif Util.isQuickModifierDown() and craftable:isCarryable() then
+            logger:debug("pickUp")
+            craftable:pickUp(reference)
+        else
+            logger:debug("activate")
+            craftable:activate(reference)
+        end
+    end
+end
+
+---@param data CraftingFramework.Craftable.data
+---@return CraftingFramework.Craftable
 function Craftable:new(data)
     Util.validate(data, Craftable.schema)
     data.id = data.id:lower()
@@ -144,12 +193,14 @@ function Craftable:new(data)
         data.previewMesh = data.mesh
         data.mesh = nil
     end
-    ---@type craftingFrameworkCraftable
-    local craftable = setmetatable(data, self)
+    setmetatable(data, self)
+
+    ---@cast data CraftingFramework.Craftable
+    local craftable = data
     self.__index = self
 
-
     local placedObjectId = craftable:getPlacedObjectId()
+    logger:debug("Registering %s, craftedOnly = %s", craftable.id, craftable.craftedOnly)
     if placedObjectId then
         local existingCraftable = Craftable.registeredCraftables[craftable.id]
         if existingCraftable then
@@ -161,12 +212,25 @@ function Craftable:new(data)
         end
         Craftable.registeredCraftables[craftable.id] = craftable
         Craftable.craftablesIdexedByPlacedObject[placedObjectId:lower()] = craftable
+        StaticActivator.register{
+            objectId = placedObjectId,
+            name = craftable.name,
+            craftedOnly = craftable.craftedOnly,
+            onActivate = craftableActivated,
+            additionalUI = craftable.additionalUI
+        }
+    elseif data.additionalUI then
+        Indicator.register{
+            additionalUI = data.additionalUI,
+            objectId = craftable.id,
+            craftedOnly = craftable.craftedOnly,
+        }
     end
     return craftable
 end
 
-
 function Craftable:activate(reference)
+    logger:debug("Craftable:activate: %s", reference)
     tes3ui.showMessageMenu{
         message = self:getName(),
         buttons = self:getMenuButtons(reference),
@@ -335,7 +399,7 @@ function Craftable:recoverMaterials(materialsUsed, materialRecovery)
             recoverMessage = recoverMessage .. string.format("\n- %s x%d", item.name, recoveredCount )
             tes3.addItem{
                 reference = tes3.player,
-                item = item,
+                item = item, ---@diagnostic disable-line: assign-type-mismatch
                 count = recoveredCount,
                 playSound = false,
                 updateGUI = false
@@ -368,12 +432,12 @@ function Craftable:destroy(reference)
     }
     reference:disable()
     if self.destroyCallback then
-        self:destroyCallback({
+        self:destroyCallback{
             reference = reference
-        })
+        }
     end
     timer.delayOneFrame(function()
-        mwscript.setDelete{ reference = reference}
+        reference:delete()
     end)
 end
 
@@ -410,42 +474,51 @@ function Craftable:playDeconstructionSound()
     tes3.playSound{soundPath = soundPick }
 end
 
+
+---@param materialsUsed table<string, number> A table of material ids and the number of each used.
 function Craftable:craft(materialsUsed)
+    logger:debug("Craftable:craft %s", self.id)
     local reference
     local item
-    if not self:isCarryable() then
-        reference = self:place(materialsUsed)
-        self:position(reference)
-    else
-        item = tes3.getObject(self.id)
-        if item then
-            local count = self.resultAmount or 1
-            tes3.addItem{
-                reference = tes3.player,
-                item = item, playSound = false,
-                count = count,
-            }
-            if count == 1 and item.maxCondition and self.recoverEquipmentMaterials then
-                local itemData = tes3.addItemData{
-                    to = tes3.player,
-                    item = item,
+    if not self.noResult then
+        if not self:isCarryable() then
+            reference = self:place(materialsUsed)
+            self:position(reference)
+        else
+            item = tes3.getObject(self.id)
+            if item then
+                local count = self.resultAmount or 1
+                tes3.addItem{
+                    reference = tes3.player,
+                    item = item, ---@diagnostic disable-line: assign-type-mismatch
+                    playSound = false,
+                    count = count,
                 }
-                itemData.data.materialsUsed = materialsUsed
-                itemData.data.materialRecovery = self.materialRecovery
+                if count == 1 and item.maxCondition and self.recoverEquipmentMaterials then
+                    local itemData = tes3.addItemData{
+                        to = tes3.player,
+                        item = item,---@diagnostic disable-line: assign-type-mismatch
+                    }
+                    itemData.data.materialsUsed = materialsUsed
+                    itemData.data.materialRecovery = self.materialRecovery
+                end
+                tes3.messageBox("You successfully crafted %s%s.",
+                    item.name,
+                    self.resultAmount and string.format(" x%d", self.resultAmount) or ""
+                )
             end
-            tes3.messageBox("You successfully crafted %s%s.",
-                item.name,
-                self.resultAmount and string.format(" x%d", self.resultAmount) or ""
-            )
         end
     end
     self:playCraftingSound()
     if self.craftCallback then
+        logger:debug("Craftable:craft %s calling callback", self.id)
         self:craftCallback{
-            item = item,
-            reference = reference
+            reference = reference,
+            item = item, ---@diagnostic disable-line: assign-type-mismatch
+            materialsUsed = materialsUsed
         }
     end
+    logger:debug("Craftable:craft %s done", self.id)
 end
 
 function Craftable:place(materialsUsed)
@@ -462,6 +535,7 @@ function Craftable:place(materialsUsed)
     local reference = tes3.createReference{
         object = self:getPlacedObjectId(),
         cell = tes3.player.cell,
+        ---@diagnostic disable-next-line: assign-type-mismatch
         orientation = tes3.player.orientation:copy() + tes3vector3.new(0, 0, math.pi),
         position = position
     }
@@ -470,7 +544,7 @@ function Craftable:place(materialsUsed)
     reference.data.materialsUsed = materialsUsed
     reference.data.materialRecovery = self.materialRecovery
     reference:updateSceneGraph()
-    reference.sceneNode:updateNodeEffects()
+    reference.sceneNode:updateEffects()
     if self.placeCallback then
         self:placeCallback{
             reference = reference
