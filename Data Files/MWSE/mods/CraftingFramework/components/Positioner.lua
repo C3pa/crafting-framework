@@ -6,7 +6,7 @@ local m1 = tes3matrix33.new()
 local logger = Util.createLogger("Positioner")
 
 ---@class CraftingFramework.Positioner
-Positioner = {
+local Positioner = {
     maxReach = 100,
     minReach = 100,
     currentReach = 500,
@@ -18,6 +18,10 @@ Positioner = {
 local function wrapRadians(x)
     return x % (2 * math.pi)
 end
+
+---@alias CraftingFramework.Positioner.PlacementSetting
+---| '"free"' #Free placement
+---| '"ground"' #Ground placement
 
 local settings = {
     free = 'free',
@@ -102,9 +106,17 @@ local function getWidth()
     if not (Positioner and Positioner.boundMax) then
         return 0
     end
-    return math.min(Positioner.boundMax.x - Positioner.boundMin.x, Positioner.boundMax.y - Positioner.boundMin.y, Positioner.boundMax.z - Positioner.boundMin.z)
+    return math.min(Positioner.boundMax.x - Positioner.boundMin.x, Positioner.boundMax.y - Positioner.boundMin.y)
 end
 
+---@param ref tes3reference
+local function getMinWidth(ref)
+    ref = ref or Positioner.active
+    return math.min(ref.object.boundingBox.max.x - ref.object.boundingBox.min.x,
+                    ref.object.boundingBox.max.y - ref.object.boundingBox.min.y,
+                    ref.object.boundingBox.max.z - ref.object.boundingBox.min.z)
+            * ref.scale
+end
 
 
 -- Called every simulation frame to reposition the item.
@@ -114,6 +126,7 @@ local function simulatePlacement()
     end
     Positioner.maxReach = tes3.getPlayerActivationDistance() + getWidth()
     Positioner.currentReach = math.min(Positioner.currentReach, Positioner.maxReach)
+
     -- Stop if player takes the object.
     if (Positioner.active.deleted) then
         logger:debug("simulatePlacement: Positioner.active is deleted, ending placement")
@@ -146,6 +159,7 @@ local function simulatePlacement()
 
     local eyePos = tes3.getPlayerEyePosition()
     local eyeVec = tes3.getPlayerEyeVector()
+
     ---The position from the player's view to the max distance
     local lookPos = eyePos + eyeVec * Positioner.currentReach
     logger:trace("eyePos: %s, eyeVec: %s, lookPos: %s", eyePos, eyeVec, lookPos)
@@ -172,37 +186,35 @@ local function simulatePlacement()
             direction = rayVec,
             ignore = { Positioner.active, tes3.player },
             maxDistance = Positioner.currentReach,
+            accurateSkinned = true,
         }
-        if ray then
+        if ray and ray.intersection then
             local width = getWidth()
             logger:trace("width: %s", width)
-            local distance = math.min(ray.distance, Positioner.currentReach) - width
-            logger:trace("distance: %s", distance)
-            local diff = targetPos:distance(eyePos) - distance
-            logger:trace("diff: %s", diff)
-            targetPos = targetPos - rayVec * diff
+            local vertDistance = math.min(ray.distance, Positioner.currentReach) + Positioner.boundMin.z
+            local horiDistance = math.min(ray.distance, Positioner.currentReach)
+
+            local vertDiff = targetPos:distance(eyePos) - vertDistance
+            local horiDiff = targetPos:distance(eyePos) - horiDistance
+
+            local newPos = targetPos - rayVec * horiDiff
+            newPos.z = (targetPos - rayVec * vertDiff).z
+            targetPos = newPos
+
             ---@cast targetPos tes3vector3
             logger:trace("new targetPos: %s", targetPos)
         end
-
-        local dropPos = targetPos:copy()
-        local rayhit = tes3.rayTest{
-            position = Positioner.active.position - tes3vector3.new(0, 0, Positioner.offset.z),
-            direction = tes3vector3.new(0, 0, -1),
-            ignore = { Positioner.active, tes3.player }
-        }
-        if (rayhit ) then
-            dropPos = rayhit.intersection:copy()
-            targetPos.z = math.max(targetPos.z, dropPos.z + (Positioner.height or 0) )
-        end
-
     end
 
-    --targetPos.z = targetPos.z + const_epsilon
 
+    if Positioner.doFloat then
+        local waterLevel = Positioner.active.cell.waterLevel
+        if waterLevel and targetPos.z < waterLevel then
+            targetPos.z = waterLevel - Positioner.floatOffset
+        end
+    end
 
     -- Incrementally rotate the same amount as the player, to keep relative alignment with player.
-
     Positioner.playerLastOri = tes3.player.orientation:copy()
     if (Positioner.rotateMode) then
         -- Use inputController, as the player orientation is locked.
@@ -212,20 +224,23 @@ local function simulatePlacement()
         d_theta = 0.001 * 15 * mouseX
     end
 
-    --logger:debug("simulatePlacement: position: %s", pos)
-    -- Update item and shadow spot.
     Positioner.active.sceneNode.appCulled = false
     Positioner.active.position = targetPos
-    Positioner.active.orientation.z = wrapRadians(Positioner.active.orientation.z + d_theta)
+    Positioner.active.orientation = tes3vector3.new(0, 0, wrapRadians(Positioner.active.orientation.z + d_theta))
+
 
     local doOrient = config.persistent.placementSetting == settings.ground
-
     if doOrient then
-        orienter.orientRefToGround{ ref = Positioner.active, mode = config.persistent.placementSetting }
-        --logger:debug("simulatePlacement: orienting %s", Positioner.active.orientation)
-    else
-        Positioner.active.orientation = tes3vector3.new(0, 0, Positioner.active.orientation.z)
+        if orienter.orientRefToGround{
+            ref = Positioner.active,
+            maxVerticalDistance = (Positioner.boundMax.z-Positioner.boundMin.z),
+            doFloat = Positioner.doFloat,
+            floatOffset = Positioner.floatOffset
+        } then
+            return
+        end
     end
+    Positioner.active.orientation = tes3vector3.new(0, 0, Positioner.active.orientation.z)
 end
 
 -- cellChanged event handler.
@@ -238,7 +253,6 @@ local function cellChanged(e)
         endPlacement()
     end
 end
-
 
 -- Match vertical mode from an orientation.
 local function matchVerticalMode(orient)
@@ -276,9 +290,6 @@ end
 Positioner.togglePlacement = function(e)
     Positioner.maxReach = tes3.getPlayerActivationDistance() + getWidth()
     e = e or { target = nil }
-    --init settings
-    Positioner.pinToWall = e.pinToWall or false
-    Positioner.blockToggle = e.blockToggle or false
 
     config.persistent.placementSetting = config.persistent.placementSetting or "ground"
     logger:debug("togglePlacement")
@@ -288,6 +299,12 @@ Positioner.togglePlacement = function(e)
         finalPlacement()
         return
     end
+
+    --init settings
+    Positioner.pinToWall = e.pinToWall or false
+    Positioner.blockToggle = e.blockToggle or false
+    Positioner.doFloat = e.doFloat or false
+    Positioner.floatOffset = e.floatOffset or 0
 
     local target
     if not e.target then
@@ -299,10 +316,11 @@ Positioner.togglePlacement = function(e)
         local ray = tes3.rayTest({
             position = tes3.getPlayerEyePosition(),
             direction = tes3.getPlayerEyeVector(),
-            ignore = { tes3.player },
+            ignore = { tes3.player, Positioner.active },
             maxDistance = Positioner.maxReach,
             root = config.persistent.placementSetting == "ground"
-                and tes3.game.worldLandscapeRoot or nil
+                and tes3.game.worldLandscapeRoot or nil,
+            accurateSkinned = true,
         })
 
         target = ray and ray.reference
@@ -371,6 +389,8 @@ Positioner.togglePlacement = function(e)
 
     config.persistent.positioningActive = true
     event.register("simulate", simulatePlacement)
+
+    event.trigger("CraftingFramework:StartPlacement", { reference = target })
 end
 
 ---@param from tes3reference
@@ -392,6 +412,17 @@ end
 --pre-declared above
 endPlacement = function()
     logger:debug("endPlacement()")
+    --if ground mode, drop to ground
+    if config.persistent.placementSetting == "ground" then
+        logger:warn("doFloat: %s, floatOffset: %s"
+            , Positioner.doFloat, Positioner.floatOffset)
+        orienter.orientRefToGround{
+            ref = Positioner.active,
+            doFloat = Positioner.doFloat,
+            floatOffset = Positioner.floatOffset
+        }
+    end
+
     recreateRef(Positioner.active)
     decals.applyDecals(Positioner.active)
     event.unregister("simulate", simulatePlacement)
@@ -510,6 +541,16 @@ end
 event.register("keyDown", onActiveKey, { priority = 100 })
 
 
+---@class Positioner.startPositioning.params
+---@field target tes3reference
+---@field nonCrafted? boolean
+---@field pinToWall? boolean
+---@field placementSetting? CraftingFramework.Positioner.PlacementSetting
+---@field blockToggle? boolean
+---@field doFloat? boolean
+---@field floatOffset? number
+
+---@param e Positioner.startPositioning.params
 Positioner.startPositioning = function(e)
     -- Put those hands away.
     if (tes3.mobilePlayer.weaponReady) then

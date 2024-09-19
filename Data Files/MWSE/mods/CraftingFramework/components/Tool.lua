@@ -3,14 +3,14 @@ local log = Util.createLogger("Tool")
 
 ---@class CraftingFramework.Tool.data
 ---@field id string **Required.**  This will be the unique identifier used internally by Crafting Framework to identify this `tool`.
----@field name string The name of the tool. Used in various UIs.
----@field ids table<number, string> **Required.**  This is the list of item ids that are considered identical tool.
----@field requirement fun(stack : tes3itemStack): boolean Optionally, you can provide a function that will be used to evaluate if a certain item in the player's inventory can be used as a tool. It will be called with a `tes3itemStack` parameter, that it needs to evaluate if it should be recognized as a tool. When that is the case the function needs to return `true`, `false` otherwise. Used when no `ids` are provided.
+---@field name? string The name of the tool. Used in various UIs.
+---@field ids? table<number, string> This is the list of item ids that are considered identical tool. Either this or `requirement` needs to be provided.
+---@field requirement? fun(stack : tes3itemStack): boolean Optionally, you can provide a function that will be used to evaluate if a certain item in the player's inventory can be used as a tool. It will be called with a `tes3itemStack` parameter, that it needs to evaluate if it should be recognized as a tool. When that is the case the function needs to return `true`, `false` otherwise. Used when no `ids` are provided.
 
 
 ---@class CraftingFramework.Tool : CraftingFramework.Tool.data
 ---@field ids table<string, boolean>
-Tool = {
+local Tool = {
     schema = {
         name = "Tool",
         fields = {
@@ -19,11 +19,10 @@ Tool = {
             ids = { type = "table", childType = "string", required = false },
             requirement = { type = "function", required = false},
         }
-    }
+    },
+    registeredTools = {}
 }
 
-
-Tool.registeredTools = {}
 ---@param id string
 ---@return CraftingFramework.Tool tool
 function Tool.getTool(id)
@@ -34,6 +33,7 @@ end
 ---@return CraftingFramework.Tool Tool
 function Tool:new(data)
     Util.validate(data, Tool.schema)
+    data = table.copy(data)
     if not Tool.registeredTools[data.id] then
         Tool.registeredTools[data.id] = {
             id = data.id,
@@ -41,6 +41,8 @@ function Tool:new(data)
             ids = {},
             requirement = data.requirement
         }
+    else
+        table.copymissing(Tool.registeredTools[data.id], data)
     end
     local tool = Tool.registeredTools[data.id]
     --add tool ids
@@ -60,16 +62,34 @@ function Tool:getName()
     return self.name
 end
 
+function Tool:hasInInventory(checkEquipped)
+    for id, _ in pairs(self:getToolIds()) do
+        local obj = tes3.getObject(id) --[[@as tes3misc]]
+        if obj then
+            local itemStack = tes3.player.object.inventory:findItemStack(obj)
+            if itemStack then
+                if checkEquipped then
+                    local equippedObject = tes3.mobilePlayer.readiedWeapon and tes3.mobilePlayer.readiedWeapon.object
+                    return itemStack.object == equippedObject
+                else
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+
 ---@param amount number
 function Tool:use(amount)
     amount = amount or 1
     log:debug("Using tool, degrading by %s", amount)
     for id, _ in pairs(self:getToolIds()) do
-        local obj = tes3.getObject(id)
+        local obj = tes3.getObject(id) --[[@as tes3misc]]
         if obj then
             local itemStack = tes3.player.object.inventory:findItemStack(obj)
             if itemStack then
-
                 if not itemStack.object.maxCondition then
                     log:debug("Found invincible tool, skipping: %s", self:getName())
                     return

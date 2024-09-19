@@ -3,24 +3,18 @@ local Craftable = require("CraftingFramework.components.Craftable")
 local StaticActivator = require("CraftingFramework.components.StaticActivator")
 local Indicator = require("CraftingFramework.components.Indicator")
 local logger = Util.createLogger("CraftingEvents")
+local RefDropper = require("CraftingFramework.components.RefDropper")
 
 ---@param e itemDroppedEventData
-local function itemDropped(e)
-    local craftable = Craftable.getCraftable(e.reference.baseObject.id)
-    if not craftable then return end
-    logger:debug("Craftable: %s", craftable and craftable.id)
-    local placedObject = craftable and craftable:getPlacedObjectId()
-    logger:trace("craftable.placedObject: %s", craftable.placedObject)
-    logger:trace("placedObject: %s", placedObject)
-    if placedObject then
-        logger:trace("placedObject: " .. placedObject)
-        if placedObject and e.reference.baseObject.id:lower() == craftable.id then
-            logger:debug("itemDropped placedObject: " .. placedObject)
-            craftable:swap(e.reference)
-        end
-    end
-end
-event.register("itemDropped", itemDropped)
+event.register("itemDropped", function(e)
+    local refSwapper = RefDropper.registeredRefDroppers[e.reference.baseObject.id:lower()]
+    if not refSwapper then return end
+    logger:debug("RefDropper: %s", refSwapper.droppedObjectId)
+    logger:debug("replacerId: %s", refSwapper.replacerId)
+    refSwapper:drop(e.reference)
+    return true
+end, { priority = -300 })
+
 
 event.register("CraftingFramework:EndPlacement", function(e)
     local reference = e.reference
@@ -38,7 +32,7 @@ local function startIndicatorTimer()
         type = timer.real,
         iterations = -1,
         callback = function()
-            StaticActivator.callRayTest{
+            StaticActivator.updateIndicator{
                 eventName = "CraftingFramework:StaticActivatorIndicator"
             }
         end
@@ -46,7 +40,14 @@ local function startIndicatorTimer()
 end
 event.register("loaded", startIndicatorTimer)
 
+local controlsAreDisabled = function()
+    return tes3.player
+        and tes3.player.mobile
+        and tes3.player.mobile.controlsDisabled
+end
+
 local function triggerActivateKey(e)
+    if controlsAreDisabled() then return end
     if (e.keyCode == tes3.getInputBinding(tes3.keybind.activate).code) and (tes3.getInputBinding(tes3.keybind.activate).device == 0) then
         StaticActivator.doTriggerActivate()
     end
@@ -54,6 +55,7 @@ end
 event.register("keyDown", triggerActivateKey, { priority = 50})
 
 local function triggerActivateMouse(e)
+    if controlsAreDisabled() then return end
     if (e.button == tes3.getInputBinding(tes3.keybind.activate).code) and (tes3.getInputBinding(tes3.keybind.activate).device == 1) then
         StaticActivator.doTriggerActivate()
     end
@@ -78,7 +80,7 @@ local function doAdditionalUI(e)
         item = e.object,
         itemData = e.itemData,
     }
-    if indicator and not indicator:doBlockNonCrafted() then
+    if indicator and indicator.additionalUI and not indicator:doBlockNonCrafted() then
         indicator:additionalUI(e.tooltip)
     end
 end

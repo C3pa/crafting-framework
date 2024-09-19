@@ -1,3 +1,6 @@
+local Util = require("CraftingFramework.util.Util")
+local logger = Util.createLogger("Orienter")
+
 local this = {}
 local ID33 = tes3matrix33.new(1, 0, 0, 0, 1, 0, 0, 0, 1)
 function this.rotationDifference(vec1, vec2)
@@ -42,7 +45,7 @@ local function isTall(ref)
     local width = bb.max.x - bb.min.x
     local depth = bb.max.y - bb.min.y
     local height = bb.max.z - bb.min.z
-    return height > depth or height > width
+    return (height > depth) or (height > width)
 end
 
 local function getMaxSteepness(ref)
@@ -63,10 +66,12 @@ function this.positionRef(ref, rayResult)
         return false
     end
     local bb = ref.object.boundingBox
-    local newZ = rayResult.intersection.z - bb.min.z
+    local newZ = rayResult.intersection.z - (bb.min.z * ref.scale)
     ref.position = {ref.position.x, ref.position.y, newZ}
 end
 
+---@param ref tes3reference
+---@param rayResult niPickRecord}
 function this.orientRef(ref, rayResult)
     local UP = tes3vector3.new(0, 0, 1)
     local maxSteepness = math.rad(getMaxSteepness(ref))
@@ -78,71 +83,90 @@ function this.orientRef(ref, rayResult)
     ref.orientation = newOrientation
 end
 
-local bottle
 function this.getGroundBelowRef(e)
-
     local ref = e.ref
-    local offset = ref.object.boundingBox.max.z-ref.object.boundingBox.min.z
+    local offset = (ref.object.boundingBox.max.z) * ref.scale
     if not ref then
         return
     end
 
-    -- if ref.baseObject.objectType == tes3.objectType.npc
-    --     or ref.baseObject.objectType == tes3.objectType.creature
-    -- then
-    --     offset = offset + 100
-    -- end
-
     local ignoreList = getIngoreList(ref)
     table.insert(ignoreList, ref)
-    if bottle then
-        table.insert(ignoreList, bottle)
-    end
+
+    local startPos = {ref.position.x, ref.position.y, ref.position.z + offset}
 
     local result = tes3.rayTest {
-        position = {ref.position.x, ref.position.y, ref.position.z + offset},
+        position = startPos,
         direction = {0, 0, -1},
         ignore = ignoreList,
         returnNormal = true,
         useBackTriangles = false,
-        root = e.terrainOnly and tes3.game.worldLandscapeRoot or nil
+        root = e.terrainOnly and tes3.game.worldLandscapeRoot or nil,
+        accurateSkinned = true,
     }
     if not result then --look up instead
         result = tes3.rayTest {
-            position = {ref.position.x, ref.position.y, ref.position.z + offset},
+            position = startPos,
             direction = {0, 0, 1},
             ignore = ignoreList,
             returnNormal = true,
             useBackTriangles = true,
-            root = e.terrainOnly and tes3.game.worldLandscapeRoot or nil
+            root = e.terrainOnly and tes3.game.worldLandscapeRoot or nil,
+            accurateSkinned = true,
         }
+        if not result then
+            return
+        end
     end
-
-    if not bottle then
-        -- bottle = tes3.createReference{
-        --     object = "misc_com_bottle_10",
-        --     position = result.intersection:copy(),
-        --     cell = ref.cell
-        -- }
-    else
-        bottle.position = result.intersection:copy()
-    end
-
     return result
 end
 
+---@class Orienter.orientRefToGround.params
+---@field ref tes3reference
+---@field maxVerticalDistance number?
+---@field doFloat boolean?
+---@field floatOffset number?
+
+---@param params Orienter.orientRefToGround.params
 function this.orientRefToGround(params)
+
     local ref = params.ref
-    local terrainOnly = params.mode == "ground"
     local result = this.getGroundBelowRef{
         ref = ref,
-        --terrainOnly = terrainOnly
     }
-    if result then
-        this.positionRef(ref, result)
-        this.orientRef(ref, result)
-        event.trigger("Ashfall:VerticaliseNodes", {reference = ref})
+
+    if not result then return false end
+
+    --doFloat: get waterLevel and set ref to that if it's below it
+    local isFloating = false
+    if params.doFloat then
+        local waterLevel = ref.cell.waterLevel
+        if waterLevel ~= nil and result.intersection.z < waterLevel then
+            result.intersection.z = waterLevel + (params.floatOffset or 0)
+            isFloating = true
+        end
     end
+
+    local tooFar = false
+    if params.maxVerticalDistance then
+        tooFar = math.abs(result.intersection.z - ref.position.z) > params.maxVerticalDistance
+    end
+    if tooFar then
+        logger:debug("Ref %s is too far from the ground", ref.id)
+        return false
+    end
+
+
+
+    logger:trace("Orienting %s to ground", ref.id)
+    this.positionRef(ref, result)
+    if isFloating then
+        ref.orientation = tes3vector3.new(0, 0, ref.orientation.z)
+    else
+        this.orientRef(ref, result)
+    end
+
+    return true
 end
 
 return this

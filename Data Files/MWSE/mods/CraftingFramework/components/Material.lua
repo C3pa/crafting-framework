@@ -1,15 +1,17 @@
 local Util = require("CraftingFramework.util.Util")
 local logger = Util.createLogger("Material")
+local MaterialStorage = require("CraftingFramework.components.MaterialStorage")
+local CarryableContainer = require("CraftingFramework.carryableContainers.components.CarryableContainer")
 
 ---@class CraftingFramework.Material.data
 ---@field id string **Required.**  This will be the unique identifier used internally by Crafting Framework to identify this `material`.
----@field name string The name of the material. Used in various UIs.
+---@field name? string The name of the material. Used in various UIs.
 ---@field ids table<number, string> **Required.**  This is the list of item ids that are considered as identical material.
 
 
 ---@class CraftingFramework.Material : CraftingFramework.Material.data
 ---@field ids table<string, boolean>
-Material = {
+local Material = {
     schema = {
         name = "Material",
         fields = {
@@ -21,7 +23,8 @@ Material = {
 }
 
 Material.registeredMaterials = {}
----@param id string
+
+---@param id string The id of the material
 ---@return CraftingFramework.Material material
 function Material.getMaterial(id)
     local material = Material.registeredMaterials[id:lower()]
@@ -45,10 +48,24 @@ function Material.getMaterial(id)
     return material
 end
 
+--- Returns the material that the item belongs to
+---@param itemId string The id of the item
+---@return CraftingFramework.Material|nil material
+function Material.getMaterialOfItem(itemId)
+    for _, material in pairs(Material.registeredMaterials) do
+        if material:isMaterial(itemId) then
+            return material
+        end
+    end
+    --not a material
+    return nil
+end
+
 ---@param data CraftingFramework.Material.data
 ---@return CraftingFramework.Material material
 function Material:new(data)
     Util.validate(data, Material.schema)
+    data = table.copy(data)
     if not Material.registeredMaterials[data.id] then
         Material.registeredMaterials[data.id] = {
             id = data.id,
@@ -85,6 +102,9 @@ end
 ---@param itemId string
 ---@return boolean isMaterial
 function Material:itemIsMaterial(itemId)
+    if not itemId then
+        return false
+    end
     return self.ids[itemId:lower()]
 end
 
@@ -93,19 +113,6 @@ function Material:getName()
     return self.name
 end
 
----@param numRequired number
----@return boolean hasEnough
-function Material:checkHasIngredient(numRequired)
-    local count = 0
-    for id, _ in pairs(self.ids) do
-        local item = tes3.getObject(id)
-        if item then
-            ---@diagnostic disable-next-line: assign-type-mismatch
-            count = count + tes3.getItemCount{ reference = tes3.player, item = item }
-        end
-    end
-    return count >= numRequired
-end
 
 --Checks if at least one ingredient in the list is valid
 function Material:hasValidIngredient()
@@ -118,4 +125,76 @@ function Material:hasValidIngredient()
     return false
 end
 
+
+
+--Removes the required number of ingredients from the player
+-- or any nearby containers
+---@return table<string, number> itemsUsed - A table of item ids and the number of items used
+function Material:use(count)
+    logger:debug("Using %s %s", count, self.name)
+    local itemsUsed = {}
+    local remaining = count
+    for id, _ in pairs(self.ids) do
+        local item = tes3.getObject(id)
+        if item then
+            local storedMaterials = MaterialStorage.getNearbyMaterials{
+                maxDistance = 1000,
+                searchAllContainers = false,
+            }
+            for _, storedMaterial in ipairs(storedMaterials) do
+                if item == storedMaterial.item then
+                    local num = storedMaterial.storageInstance:removeItem{
+                        reference = storedMaterial.storedIn,
+                        item = item,
+                        count = remaining
+                    }
+                    if num > 0 then
+                        logger:debug("Removed %s %s from %s", num, item.name, storedMaterial.storedIn.object.name)
+                        remaining = remaining - num
+                        itemsUsed[item.id] = (itemsUsed[item.id] or 0) + num
+                    end
+                    if remaining <= 0 then
+                        break
+                    end
+                end
+            end
+        end
+    end
+    for _, carryable in ipairs(CarryableContainer.getCarryableContainersInInventory()) do
+        carryable:updateStats()
+    end
+    tes3ui.forcePlayerInventoryUpdate()
+    return itemsUsed
+end
+
+---Get how many items are available for each ingredient
+function Material:getItemCount(id)
+    id = id:lower()
+    logger:assert(self.ids[id], "Material %s does not contain %s", self.id, id)
+    local item = tes3.getObject(id)
+    if item then
+        local count = 0
+        local storedMaterials = MaterialStorage.getNearbyMaterials{
+            maxDistance = 1000,
+            searchAllContainers = false,
+        }
+        for _, storedMaterial in ipairs(storedMaterials) do
+            if storedMaterial.item.id:lower() == id then
+                count = count + storedMaterial.count
+            end
+        end
+        return count
+    end
+    return 0
+end
+
+---@param numRequired number
+---@return boolean hasEnough
+function Material:checkHasIngredient(numRequired)
+    local count = 0
+    for id, _ in pairs(self.ids) do
+        count = count + self:getItemCount(id)
+    end
+    return count >= numRequired
+end
 return Material

@@ -1,19 +1,25 @@
+---@class CraftingFramework.Util
 local Util = {}
 local config = require("CraftingFramework.config")
 
+---@type table<string, mwseLogger>
 Util.loggers = {}
 do --logger
     local logLevel = config.mcm.logLevel
     local logger = require("logging.logger")
+    --[[
+        Creates a logger with the given service name.
+        The service name will be prefixed with the mod name.
+    ]]
     Util.createLogger = function(serviceName)
         local logger = logger.new{
             name = string.format("%s: %s", config.static.modName, serviceName),
-            logLevel = logLevel
+            logLevel = logLevel,
+            includeTimestamp = true
         }
         Util.loggers[serviceName] = logger
         return logger
     end
-
 end
 local logger = Util.createLogger("Util")
 
@@ -113,7 +119,6 @@ Util.removeLight = function(lightNode)
                 local emissive = materialProperty.emissive
                 emissive.r, emissive.g, emissive.b = 0,0,0
                 materialProperty.emissive = emissive
-
                 node:updateProperties()
             end
         end
@@ -121,7 +126,7 @@ Util.removeLight = function(lightNode)
         local texturingProperty = node:getProperty(0x4)
         local newTextureFilepath = "Textures\\tx_black_01.dds"
         if (texturingProperty and texturingProperty.maps[4]) then
-        texturingProperty.maps[4].texture = niSourceTexture.createFromPath(newTextureFilepath)
+            texturingProperty.maps[4].texture = niSourceTexture.createFromPath(newTextureFilepath)
         end
         if (texturingProperty and texturingProperty.maps[5]) then
             texturingProperty.maps[5].texture = niSourceTexture.createFromPath(newTextureFilepath)
@@ -138,11 +143,31 @@ function Util.deleteRef(ref, no)
     ---@diagnostic disable-next-line: deprecated
     mwscript.setDelete{ reference = ref}
 end
+
 function Util.isShiftDown()
     local ic = tes3.worldController.inputController
 	return ic:isKeyDown(tes3.scanCode.leftShift) or ic:isKeyDown(tes3.scanCode.rightShift)
 end
 
+function Util.getQuickModifierKey()
+    return config.mcm.quickModifierHotkey.keyCode
+end
+
+---Get the human readable string value of the given key code
+function Util.getLetter(keyCode)
+	local letter = table.find(tes3.scanCode, keyCode)
+	local returnString = tes3.scanCodeToNumber[keyCode] or letter
+	if returnString then
+		return string.upper(returnString)
+	end
+end
+
+---Get the human readable string value of the quick modifier key
+function Util.getQuickModifierKeyText()
+    return Util.getLetter(Util.getQuickModifierKey())
+end
+
+---Check if the player is holding down the configured quick modifier key
 function Util.isQuickModifierDown()
     local quickModifier = config.mcm.quickModifierHotkey
     local ic = tes3.worldController.inputController
@@ -162,7 +187,7 @@ end
 ---@param ref tes3reference
 function Util.canBeActivated(ref)
     local hasScript = ref.baseObject.script ~= nil
-    return hasScript
+    return hasScript or ref.baseObject.objectType == tes3.objectType.container
 end
 
 ---@return any
@@ -176,6 +201,22 @@ function Util.convertListTypes(list, classType)
         table.insert(newList, newItem)
     end
     return newList
+end
+
+--[[
+    Forces a container to be instanced,
+    which will resolve any leveled items
+    in its inventory
+]]
+---@param reference tes3reference
+function Util.forceInstance(reference)
+    local object = reference.object
+    if (object.isInstance == false) then
+        ---@diagnostic disable-next-line
+        object:clone(reference)
+        reference.modified = true
+    end
+    return reference --.object
 end
 
 return Util

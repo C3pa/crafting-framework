@@ -8,15 +8,17 @@ local logger = Util.createLogger("Indicator")
 
 ---@class CraftingFramework.Indicator.data
 ---@field objectId string The object id to register the indicator for
----@field name string The name to display in the tooltip.
----@field craftedOnly boolean If true, the indicator will only show if the object is crafted.
----@field additionalUI fun(self: CraftingFramework.Indicator, parent: tes3uiElement) A function that adds additional UI elements to the tooltip.
+---@field name? string The name to display in the tooltip.
+---@field craftedOnly? boolean If true, the indicator will only show if the object is crafted.
+---@field additionalUI? fun(self: CraftingFramework.Indicator, parent: tes3uiElement) A function that adds additional UI elements to the tooltip.
 
 ---@class CraftingFramework.Indicator : CraftingFramework.Indicator.data
----@field reference tes3reference
+---@field reference? tes3reference
 ---@field item tes3object|tes3item|tes3misc
 ---@field dataHolder tes3itemData|tes3reference
-Indicator = {}
+---@field nodeLookingAt? niNode The node that the player is looking at
+local Indicator = {}
+
 ---@type table<string, CraftingFramework.Indicator.data> List of registered indicator objects, indexed by object id
 Indicator.registeredObjects = {}
 
@@ -44,6 +46,7 @@ function Indicator:new(e)
     local indicator = table.copy(data)
     indicator.item = object
     indicator.dataHolder = e.itemData or e.reference
+    indicator.reference = e.reference
     setmetatable(indicator, self)
     self.__index = self
     return indicator
@@ -60,8 +63,7 @@ local function getTooltip()
 end
 
 function Indicator:createOrUpdateTooltipMenu()
-    local indicator = Indicator.registeredObjects[self.item.id:lower()]
-    local headerText = indicator.name
+    local headerText = self.name
     local MenuMulti = tes3ui.findMenu(tes3ui.registerID("MenuMulti"))
     if not MenuMulti then return end
     local tooltipMenu = MenuMulti:findChild(id_indicator)
@@ -96,11 +98,11 @@ function Indicator:createOrUpdateTooltipMenu()
         header.autoWidth = true
         header.color = tes3ui.getPalette("header_color")
     end
-    if indicator.additionalUI then
+    if self.additionalUI then
         local additionalUIBlock = labelBorder:createBlock()
         additionalUIBlock.autoHeight = true
         additionalUIBlock.autoWidth = true
-        indicator:additionalUI(additionalUIBlock)
+        self:additionalUI(additionalUIBlock)
     end
 
     return labelBorder
@@ -114,7 +116,9 @@ function Indicator:doBlockNonCrafted()
 end
 
 --- Update the indicator with the given reference
-function Indicator:update()
+---@param nodeLookingAt niNode|nil
+function Indicator:update(nodeLookingAt)
+    self.nodeLookingAt = nodeLookingAt
     --get menu
     local menu = tes3ui.findMenu(tes3ui.registerID("MenuMulti"))
     --If its an activator with a name, it'll already have a tooltip
@@ -131,6 +135,10 @@ function Indicator:update()
     else
         Indicator.disable()
     end
+end
+
+function Indicator:setNodeLookingAt(node)
+    self.nodeLookingAt = node
 end
 
 ---Hide the indicator if it's visible
